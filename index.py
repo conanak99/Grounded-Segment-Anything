@@ -1,5 +1,5 @@
 import warnings
-from segment_anything import build_sam, SamPredictor
+from segment_anything import build_sam, build_sam_hq, SamPredictor
 from GroundingDINO.groundingdino.util.inference import annotate, load_image, predict
 from GroundingDINO.groundingdino.util.utils import clean_state_dict
 from GroundingDINO.groundingdino.util.slconfig import SLConfig
@@ -22,6 +22,7 @@ import numpy as np
 
 from dotenv import load_dotenv
 from PIL import Image, ImageFilter
+
 load_dotenv()
 warnings.filterwarnings("ignore")
 
@@ -49,10 +50,13 @@ def load_model_hf(repo_id, filename, ckpt_config_filename, device='cpu'):
     return model
 
 
-def download_image(url, image_file_path):
+def download_image(url):
     r = requests.get(url, timeout=4.0)
     if r.status_code != requests.codes.ok:
         assert False, 'Status code error: {}.'.format(r.status_code)
+
+    random_id = str(time.time())[:10ga]
+    image_file_path = "download/{}_0.jpg".format(random_id)
 
     with Image.open(BytesIO(r.content)) as im:
         # Resize image to maximum width of 600 pixels
@@ -65,6 +69,7 @@ def download_image(url, image_file_path):
         im.save(image_file_path)
     print('Image downloaded from url: {} and saved to: {}.'.format(
         url, image_file_path))
+    return random_id
 
 
 def detect(image, text_prompt, model, box_threshold=0.3, text_threshold=0.25):
@@ -99,38 +104,34 @@ def segment(image, sam_model, boxes):
     return masks.cpu()
 
 
-def draw_mask(mask, image, random_color=True):
-    if random_color:
-        color = np.concatenate([np.random.random(3), np.array([0.8])], axis=0)
-    else:
-        color = np.array([30/255, 144/255, 255/255, 0.6])
-    h, w = mask.shape[-2:]
-    mask_image = mask.reshape(h, w, 1) * color.reshape(1, 1, -1)
-
-    annotated_frame_pil = Image.fromarray(image).convert("RGBA")
-    mask_image_pil = Image.fromarray(
-        (mask_image.cpu().numpy() * 255).astype(np.uint8)).convert("RGBA")
-
-    return np.array(Image.alpha_composite(annotated_frame_pil, mask_image_pil))
-
-
+print("Loading GroundingDino model from HuggingFace Hub...")
 ckpt_repo_id = "ShilongLiu/GroundingDINO"
 ckpt_filenmae = "groundingdino_swinb_cogcoor.pth"
 ckpt_config_filename = "GroundingDINO_SwinB.cfg.py"
-print("Loading GroundingDino model from HuggingFace Hub...")
 groundingdino_model = load_model_hf(
     ckpt_repo_id, ckpt_filenmae, ckpt_config_filename, device)
 print("GroundingDino Model loaded.")
 
-sam_checkpoint = 'sam_vit_h_4b8939.pth'
 print("Loading SAM Predictor...")
-sam_predictor = SamPredictor(build_sam(checkpoint=sam_checkpoint).to(device))
+# sam_predictor = SamPredictor(
+#     build_sam(checkpoint='sam_vit_h_4b8939.pth').to(device))
+
+# checkpoint = torch.load('sam_hq_vit_tiny.pth',
+#                         map_location=torch.device(device))
+# light_hqsam = setup_model()
+# light_hqsam.load_state_dict(checkpoint, strict=True)
+# light_hqsam.to(device=device)
+# sam_predictor = SamPredictor(light_hqsam)
+
+# #Sam HQ, 5-10% slower only
+# https://github.com/SysCV/sam-hq?tab=readme-ov-file#model-checkpoints
+# Might need to change the code of build_sam_hq to load from cpu lol
+sam_predictor = SamPredictor(
+    build_sam_hq(checkpoint="sam_hq_vit_h.pth").to(device))
+
 print("SAM Model loaded.")
 
 # Load image
-local_image_path = "download/inpaint_demo.jpg"
-mask_image_path = "download/mask.png"
-mask_expand_image_path = "download/mask_expand.png"
 clothes_prompts = "clothes, clothing"  # or bra, panties, clothes
 
 while True:
@@ -140,7 +141,13 @@ while True:
         break
 
     image_url = user_input
-    download_image(image_url, local_image_path)
+    file_id = download_image(image_url)
+
+    local_image_path = "download/{}_0.jpg".format(file_id)
+    mask_image_path = "download/{}_1_mask.png".format(file_id)
+    mask_expand_image_path = "download/{}_2_mask_expand.png".format(file_id)
+    output_image_path = "download/{}_3_output.png".format(file_id)
+
     image_source, image = load_image(local_image_path)
 
     # Detect sections with DINO
@@ -158,18 +165,19 @@ while True:
     print("Segmenting...")
     segmented_frame_masks = segment(
         image_source, sam_predictor, boxes=detected_boxes)
-    annotated_frame_with_mask = draw_mask(
-        segmented_frame_masks[0][0], annotated_frame)
 
     end_time = time.time()
     execution_time = end_time - start_time
     print("Execution time [segment]: {:.2f} seconds".format(execution_time))
 
+    # Save mask image
     mask = segmented_frame_masks[0][0].cpu().numpy()
     image_mask_pil = Image.fromarray(mask)
     image_mask_pil = image_mask_pil.filter(ImageFilter.MaxFilter(3))
     image_mask_pil.save(mask_image_path)
 
+    # Expand mask image
+    # https://stackoverflow.com/questions/74996702/pil-numpy-enlarging-white-areas-of-black-white-mask-image
     mask = cv2.imread(mask_image_path, cv2.IMREAD_GRAYSCALE)
     # Dilate with an elliptical/circular structuring element
     SE = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
@@ -190,27 +198,27 @@ while True:
     start_time = time.time()
     print("Inpainting...")
     client = NovitaClient(os.getenv("NOVITA_AI_API_KEY"))
-    output_image_path = "download/output.png"
+
     req = Img2ImgRequest(
         model_name='realisticVisionV40_v40VAE-inpainting_81543.safetensors',
         init_images=[encoded_image],
         mask=encoded_mask,
         prompt='raw photo of a nude woman, (naked)',
-        negative_prompt='((clothing)), (monochrome:1.3), (deformed, distorted, disfigured:1.3), (hair), jeans, tattoo, wet, water, clothing, shadow, 3d render, cartoon, ((blurry)), duplicate, ((duplicate body parts)), (disfigured), (poorly drawn), ((missing limbs)), logo, signature, text, words, low res, boring, artifacts, bad art, gross, ugly, poor quality, low quality, poorly drawn, bad anatomy, wrong anatomy​',
+        negative_prompt='((clothing)), (monochrome:1.3), (deformed, distorted, disfigured:1.3), ((hair)), jeans, tattoo, wet, water, clothing, shadow, 3d render, cartoon, ((blurry)), duplicate, ((duplicate body parts)), (disfigured), (poorly drawn), ((missing limbs)), logo, signature, text, words, low res, boring, artifacts, bad art, gross, ugly, poor quality, low quality, poorly drawn, bad anatomy, wrong anatomy',
         sampler_name="DPM++ SDE Karras",
         cfg_scale=7,
         steps=20,
         width=width,
         height=height,
         seed=-1,
-        denoising_strength=0.7,
+        denoising_strength=0.9,
         inpainting_fill=0
     )
     save_image(client.sync_txt2img(req).data.imgs_bytes[0], output_image_path)
 
     end_time = time.time()
     execution_time = end_time - start_time
-    print("Execution time [input]: {:.2f} seconds".format(execution_time))
+    print("Execution time [inpaint]: {:.2f} seconds".format(execution_time))
 
     output_image = Image.open(output_image_path)
     output_image.show()
