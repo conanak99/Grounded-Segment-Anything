@@ -21,3 +21,5 @@ yapf
 nltk
 fairscale
 litellm
+novita_client
+dotenv
