@@ -250,4 +250,4 @@ while True:
     fig.tight_layout()
     figManager = plt.get_current_fig_manager()
     figManager.full_screen_toggle()
-    plt.show()
+    plt.show(block=False)
