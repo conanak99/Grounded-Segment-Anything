@@ -1,3 +1,4 @@
+import matplotlib.pyplot as plt
 import warnings
 from segment_anything import build_sam, build_sam_hq, SamPredictor
 from GroundingDINO.groundingdino.util.inference import annotate, load_image, predict
@@ -55,7 +56,7 @@ def download_image(url):
     if r.status_code != requests.codes.ok:
         assert False, 'Status code error: {}.'.format(r.status_code)
 
-    random_id = str(time.time())[:10ga]
+    random_id = str(time.time())[:10]
     image_file_path = "download/{}_0.jpg".format(random_id)
 
     with Image.open(BytesIO(r.content)) as im:
@@ -143,10 +144,9 @@ while True:
     image_url = user_input
     file_id = download_image(image_url)
 
-    local_image_path = "download/{}_0.jpg".format(file_id)
-    mask_image_path = "download/{}_1_mask.png".format(file_id)
-    mask_expand_image_path = "download/{}_2_mask_expand.png".format(file_id)
-    output_image_path = "download/{}_3_output.png".format(file_id)
+    local_image_path = f"download/{file_id}_0.jpg"
+    mask_image_path = f"download/{file_id}_1_mask.png"
+    mask_expand_image_path = f"download/{file_id}_2_mask_expand.png"
 
     image_source, image = load_image(local_image_path)
 
@@ -199,6 +199,7 @@ while True:
     print("Inpainting...")
     client = NovitaClient(os.getenv("NOVITA_AI_API_KEY"))
 
+    generation_count = 2
     req = Img2ImgRequest(
         model_name='realisticVisionV40_v40VAE-inpainting_81543.safetensors',
         init_images=[encoded_image],
@@ -212,13 +213,41 @@ while True:
         height=height,
         seed=-1,
         denoising_strength=0.9,
+        n_iter=generation_count,
         inpainting_fill=0
     )
-    save_image(client.sync_txt2img(req).data.imgs_bytes[0], output_image_path)
+    data = client.sync_txt2img(req).data
+    for i in range(generation_count):
+        output_image_path = f'download/{file_id}_3_output_{i}.png'
+        save_image(data.imgs_bytes[i], output_image_path)
 
     end_time = time.time()
     execution_time = end_time - start_time
     print("Execution time [inpaint]: {:.2f} seconds".format(execution_time))
 
-    output_image = Image.open(output_image_path)
-    output_image.show()
+    # Plot original images, mask and output images
+    total_rows = generation_count + 2
+    fig = plt.figure()
+    plt.subplot(1, total_rows, 1)
+    plt.imshow(Image.open(local_image_path))
+    plt.title("Original Image")
+    plt.axis("off")
+
+    plt.subplot(1, total_rows, 2)
+    plt.imshow(Image.open(mask_expand_image_path))
+    plt.title("Mask")
+    plt.axis("off")
+
+    # Show output images
+    for i in range(generation_count):
+        output_image_path = f'download/{file_id}_3_output_{i}.png'
+        output_image = Image.open(output_image_path)
+        plt.subplot(1, total_rows, i + 1 + 2)
+        plt.imshow(output_image)
+        plt.title(f"Output Image {i+1}")
+        plt.axis("off")
+
+    fig.tight_layout()
+    figManager = plt.get_current_fig_manager()
+    figManager.full_screen_toggle()
+    plt.show()
