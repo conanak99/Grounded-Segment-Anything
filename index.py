@@ -12,6 +12,7 @@ from huggingface_hub import hf_hub_download
 from io import BytesIO
 
 import os
+import cv2
 import sys
 import time
 import base64
@@ -20,6 +21,7 @@ import requests
 import numpy as np
 
 from dotenv import load_dotenv
+from PIL import Image, ImageFilter
 load_dotenv()
 warnings.filterwarnings("ignore")
 
@@ -128,9 +130,9 @@ print("SAM Model loaded.")
 # Load image
 local_image_path = "download/inpaint_demo.jpg"
 mask_image_path = "download/mask.png"
+mask_expand_image_path = "download/mask_expand.png"
 clothes_prompts = "clothes, clothing"  # or bra, panties, clothes
 
-# image_url = "https://pbs.twimg.com/media/GCenbwybcAErMs5?format=jpg&name=900x900"
 while True:
     user_input = input("Enter image URL (or 'quit' to exit): ")
     if user_input == "quit":
@@ -165,8 +167,14 @@ while True:
 
     mask = segmented_frame_masks[0][0].cpu().numpy()
     image_mask_pil = Image.fromarray(mask)
-    mask_image_path = "download/mask.png"
+    image_mask_pil = image_mask_pil.filter(ImageFilter.MaxFilter(3))
     image_mask_pil.save(mask_image_path)
+
+    mask = cv2.imread(mask_image_path, cv2.IMREAD_GRAYSCALE)
+    # Dilate with an elliptical/circular structuring element
+    SE = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    res = cv2.morphologyEx(mask, cv2.MORPH_DILATE, SE)
+    cv2.imwrite(mask_expand_image_path, res)
 
     # Convert image to base64
     with open(local_image_path, "rb") as image_file:
@@ -174,7 +182,7 @@ while True:
             base64.b64encode(image_file.read()).decode('utf-8')
     with Image.open(local_image_path) as im:
         width, height = im.size
-    with open(mask_image_path, "rb") as image_file:
+    with open(mask_expand_image_path, "rb") as image_file:
         encoded_mask = "data:image/png;base64," + \
             base64.b64encode(image_file.read()).decode('utf-8')
 
@@ -195,7 +203,7 @@ while True:
         width=width,
         height=height,
         seed=-1,
-        denoising_strength=0.,
+        denoising_strength=0.7,
         inpainting_fill=0
     )
     save_image(client.sync_txt2img(req).data.imgs_bytes[0], output_image_path)
