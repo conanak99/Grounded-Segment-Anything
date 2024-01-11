@@ -6,27 +6,16 @@ from GroundingDINO.groundingdino.util.utils import clean_state_dict
 from GroundingDINO.groundingdino.util.slconfig import SLConfig
 from GroundingDINO.groundingdino.util import box_ops
 from GroundingDINO.groundingdino.models import build_model
-import GroundingDINO.groundingdino.datasets.transforms as T
 from PIL import Image
-from novita_client import NovitaClient, Img2ImgRequest, save_image
 from huggingface_hub import hf_hub_download
-from io import BytesIO
 from EfficientSAM.LightHQSAM.setup_light_hqsam import setup_model
 
 import os
-import cv2
 import sys
 import time
-import base64
 import torch
-import requests
 import numpy as np
 
-from dotenv import load_dotenv
-from PIL import Image, ImageFilter
-import os
-
-load_dotenv()
 warnings.filterwarnings("ignore")
 
 sys.path.append(os.path.join(os.getcwd(), "GroundingDINO"))
@@ -128,6 +117,7 @@ light_sam_predictor = SamPredictor(light_hqsam)
 print("3 SAM Models loaded.")
 
 # Load image
+# clothes_prompts = "face and hair"  # or bra, panties, clothes
 clothes_prompts = "clothes, clothing"  # or bra, panties, clothes
 
 sample_folder = 'samples'
@@ -188,8 +178,8 @@ for file_name in file_names:
 
             end_time = time.time()
             execution_time = end_time - start_time
-            print(
-                f"Execution time [segment with {predictor_name}]: {execution_time:.2f} seconds.")
+            print("Execution time [segment with {}: {:.2f} seconds].".format(
+                predictor_name, execution_time))
             plt.subplot(1, total_rows, i)
             plt.imshow(output_image)
             plt.title(predictor_name)

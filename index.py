@@ -67,7 +67,7 @@ def download_image(url):
             new_height = int((new_width / width) * height)
             im = im.resize((new_width, new_height))
 
-        im.save(image_file_path)
+        im.convert('RGB').save(image_file_path)
     print('Image downloaded from url: {} and saved to: {}.'.format(
         url, image_file_path))
     return random_id
@@ -136,7 +136,12 @@ print("SAM Model loaded.")
 clothes_prompts = "clothes, clothing"  # or bra, panties, clothes
 
 while True:
-    user_input = input("Enter image URL (or 'quit' to exit): ")
+    user_input = input("Enter image URL (or 'quit' to exit):")
+
+    # Small fix, some plt code make the user input weird
+    if user_input.strip() == "":
+        continue
+
     if user_input == "quit":
         print("Quit program")
         break
@@ -201,10 +206,12 @@ while True:
 
     generation_count = 2
     req = Img2ImgRequest(
-        model_name='realisticVisionV40_v40VAE-inpainting_81543.safetensors',
         init_images=[encoded_image],
         mask=encoded_mask,
+        model_name='realisticVisionV40_v40VAE-inpainting_81543.safetensors',
         prompt='raw photo of a nude woman, (naked)',
+        # model_name='meinahentai_v4-inpainting_86046.safetensors',
+        # prompt='art of a nude woman, (naked)',
         negative_prompt='((clothing)), (monochrome:1.3), (deformed, distorted, disfigured:1.3), ((hair)), jeans, tattoo, wet, water, clothing, shadow, 3d render, cartoon, ((blurry)), duplicate, ((duplicate body parts)), (disfigured), (poorly drawn), ((missing limbs)), logo, signature, text, words, low res, boring, artifacts, bad art, gross, ugly, poor quality, low quality, poorly drawn, bad anatomy, wrong anatomy',
         sampler_name="DPM++ SDE Karras",
         cfg_scale=7,
@@ -250,4 +257,4 @@ while True:
     fig.tight_layout()
     figManager = plt.get_current_fig_manager()
     figManager.full_screen_toggle()
-    plt.show(block=False)
+    plt.show()
