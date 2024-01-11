@@ -10,6 +10,7 @@ from PIL import Image
 from huggingface_hub import hf_hub_download
 from EfficientSAM.LightHQSAM.setup_light_hqsam import setup_model
 
+import cv2
 import os
 import sys
 import time
@@ -84,7 +85,7 @@ def draw_mask(mask, image, random_color=True):
 
     annotated_frame_pil = Image.fromarray(image).convert("RGBA")
     mask_image_pil = Image.fromarray(
-        (mask_image.cpu().numpy() * 255).astype(np.uint8)).convert("RGBA")
+        (mask_image * 255).astype(np.uint8)).convert("RGBA")
 
     return np.array(Image.alpha_composite(annotated_frame_pil, mask_image_pil))
 
@@ -98,31 +99,13 @@ groundingdino_model = load_model_hf(
 print("GroundingDino Model loaded.")
 
 print("Loading SAM Predictor...")
-sam_predictor = SamPredictor(
-    build_sam(checkpoint='sam_vit_h_4b8939.pth').to(device))
-
-# #Sam HQ, 5-10% slower only
-# https://github.com/SysCV/sam-hq?tab=readme-ov-file#model-checkpoints
-# Might need to change the code of build_sam_hq to load from cpu lol
 hq_sam_predictor = SamPredictor(
     build_sam_hq(checkpoint="sam_hq_vit_h.pth").to(device))
-
-checkpoint = torch.load('sam_hq_vit_tiny.pth',
-                        map_location=torch.device(device))
-light_hqsam = setup_model()
-light_hqsam.load_state_dict(checkpoint, strict=True)
-light_hqsam.to(device=device)
-light_sam_predictor = SamPredictor(light_hqsam)
-
-print("3 SAM Models loaded.")
-
-# Load image
-# clothes_prompts = "face and hair"  # or bra, panties, clothes
-clothes_prompts = "clothes, clothing"  # or bra, panties, clothes
+print("SAM Models loaded.")
 
 sample_folder = 'samples'
-test_folder = 'test_segment'
 file_names = os.listdir(sample_folder)
+test_folder = 'test_body'
 # get files only, ignore folders
 file_names = [file_name for file_name in file_names if '.' in file_name]
 
@@ -133,29 +116,19 @@ for file_name in file_names:
         local_image_path = f'{sample_folder}/{file_name}'
         result_file_path = f'samples/{test_folder}/{file_name}'
 
+        # get file name without extension
+
         # continue loop if result file already exists
         if os.path.exists(result_file_path):
             print(f'{file_name} result existed.')
             continue
 
+        file_name_no_extension = os.path.splitext(file_name)[0]
+        body_mask_file_path = f'samples/{test_folder}/{file_name_no_extension}_body_mask.png'
+        head_mask_file_path = f'samples/{test_folder}/{file_name_no_extension}_head_mask.png'
+        final_mask_file_path = f'samples/{test_folder}/{file_name_no_extension}_final_mask.png'
+
         image_source, image = load_image(local_image_path)
-
-        # Detect sections with DINO
-        start_time = time.time()
-        print("Detecting...")
-        annotated_frame, detected_boxes = detect(
-            image, text_prompt=clothes_prompts, model=groundingdino_model)
-
-        end_time = time.time()
-        execution_time = end_time - start_time
-        print("Execution time [detect]: {:.2f} seconds".format(execution_time))
-
-        # Segment with Dino input + SAM
-        sam_predictors = {
-            "light_sam_predictor": light_sam_predictor,
-            "sam_predictor": sam_predictor,
-            "hq_sam_predictor": hq_sam_predictor
-        }
 
         # Plot original images, mask and output images
         total_rows = 4
@@ -165,27 +138,76 @@ for file_name in file_names:
         plt.title("Original Image")
         plt.axis("off")
 
-        i = 2
-        for predictor_name, predictor in sam_predictors.items():
-            start_time = time.time()
-            print(f"Segmenting with {predictor_name}...")
-            segmented_frame_masks = segment(
-                image_source, predictor, boxes=detected_boxes)
+        # Detect sections with DINO
+        start_time = time.time()
+        print("Detecting body...")
+        annotated_frame, detected_boxes = detect(
+            image, text_prompt="body", model=groundingdino_model)
 
-            annotated_frame_with_mask = draw_mask(
-                segmented_frame_masks[0][0], annotated_frame)
+        end_time = time.time()
+        execution_time = end_time - start_time
+        print("Execution time [detect body]: {:.2f} seconds".format(
+            execution_time))
 
-            output_image = Image.fromarray(annotated_frame_with_mask)
+        # Segment with Dino input + SAM
 
-            end_time = time.time()
-            execution_time = end_time - start_time
-            print("Execution time [segment with {}: {:.2f} seconds].".format(
-                predictor_name, execution_time))
-            plt.subplot(1, total_rows, i)
-            plt.imshow(output_image)
-            plt.title(predictor_name)
-            plt.axis("off")
-            i = i + 1
+        start_time = time.time()
+        print("Segmenting body...")
+        segmented_frame_masks = segment(
+            image_source, hq_sam_predictor, boxes=detected_boxes)
+
+        body_mask = segmented_frame_masks[0][0].cpu().numpy()
+
+        plt.subplot(1, total_rows, 2)
+        plt.imshow(Image.fromarray(body_mask))
+        Image.fromarray(body_mask).save(body_mask_file_path)
+        plt.axis("off")
+
+        end_time = time.time()
+        execution_time = end_time - start_time
+        print("Execution time [segment body]: {:.2f} seconds".format(
+            execution_time))
+
+        start_time = time.time()
+        print("Detecting body...")
+        annotated_frame, detected_boxes = detect(
+            image, text_prompt="head,face", model=groundingdino_model)
+
+        end_time = time.time()
+        execution_time = end_time - start_time
+        print("Execution time [face and hair]: {:.2f} seconds".format(
+            execution_time))
+
+        # Segment with Dino input + SAM
+
+        start_time = time.time()
+        print("Segmenting face and hair...")
+        segmented_frame_masks = segment(
+            image_source, hq_sam_predictor, boxes=detected_boxes)
+
+        head_mask = segmented_frame_masks[0][0].cpu().numpy()
+
+        plt.subplot(1, total_rows, 3)
+        plt.imshow(Image.fromarray(head_mask))
+        plt.axis("off")
+        Image.fromarray(head_mask).save(head_mask_file_path)
+
+        end_time = time.time()
+        execution_time = end_time - start_time
+        print("Execution time [segment face and hair]: {:.2f} seconds".format(
+            execution_time))
+
+        # Remove face and hair mash from body mask
+        body_mask = cv2.imread(body_mask_file_path, cv2.IMREAD_GRAYSCALE)
+        head_mask = cv2.imread(head_mask_file_path, cv2.IMREAD_GRAYSCALE)
+        final_mask = body_mask - np.bitwise_and(body_mask, head_mask)
+        Image.fromarray(final_mask).save(final_mask_file_path)
+
+        annotated_frame_with_mask = draw_mask(
+            final_mask, annotated_frame)
+        plt.subplot(1, total_rows, 4)
+        plt.imshow(Image.fromarray(annotated_frame_with_mask))
+        plt.axis("off")
 
         fig.tight_layout()
         plt.savefig(result_file_path, dpi=300)
